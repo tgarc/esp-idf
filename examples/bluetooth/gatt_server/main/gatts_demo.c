@@ -5,12 +5,21 @@
 // You may obtain a copy of the License at
 
 //     http://www.apache.org/licenses/LICENSE-2.0
-//
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//// v/r = i; p = i2r => v2/r
+// 20*log10(1/32768) = -96dB
+// 20*log10(1000) = 60dB
+// 10x in quantity = +20dB
+// 2x in quantity ~ +6.02dB
+// or 10^(x/20) where x is the quantity
+// 20*exponent = dB
+// power quantity is directly proportianl to power
+// field quantity/amplitude is a quantity that when squared is *proportional*
+// to power
 
 /****************************************************************************
 *
@@ -82,8 +91,9 @@ static uint8_t adv_config_done = 0;
 
 #ifdef CONFIG_SET_RAW_ADV_DATA
 static uint8_t raw_adv_data[] = {
-        0x02, 0x01, 0x06,
-        0x02, 0x0a, 0xeb, 0x03, 0x03, 0xab, 0xcd
+        0x02, 0x01, 0x06, // the first data is 0x02 bytes: 0x01 specifies the FLAGS data type: (0x06) LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED
+        0x02, 0x0a, 0xeb, // next data is 2 bytes: 0x0a is Tx Power Level type: 235 dBm
+        0x03, 0x03, 0xab, 0xcd // next is 3 bytes: 0x03 is Complete List of Services: 0xcdba (16bit UUID)
 };
 static uint8_t raw_scan_rsp_data[] = {
         0x0f, 0x09, 0x45, 0x53, 0x50, 0x5f, 0x47, 0x41, 0x54, 0x54, 0x53, 0x5f, 0x44,
@@ -167,6 +177,7 @@ struct gatts_profile_inst {
 };
 
 /* One gatt-based profile one app_id and one gatts_if, this array will store the gatts_if returned by ESP_GATTS_REG_EVT */
+// tab = table?
 static struct gatts_profile_inst gl_profile_tab[PROFILE_NUM] = {
     [PROFILE_A_APP_ID] = {
         .gatts_cb = gatts_profile_a_event_handler,
@@ -223,6 +234,9 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         //advertising start complete event to indicate advertising start successfully or failed
         if (param->adv_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
             ESP_LOGE(GATTS_TAG, "Advertising start failed\n");
+        }
+        else {
+            ESP_LOGI(GATTS_TAG, "Advertising started\n");
         }
         break;
     case ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT:
@@ -447,6 +461,9 @@ static void gatts_profile_a_event_handler(esp_gatts_cb_event_t event, esp_gatt_i
         for(int i = 0; i < length; i++){
             ESP_LOGI(GATTS_TAG, "prf_char[%x] =%x\n",i,prf_char[i]);
         }
+
+        // See Vol. 3 Part G. Section 3.3.3.3
+        // defines how the characteristic may be configured by a specific client; consists of only a bit field
         esp_err_t add_descr_ret = esp_ble_gatts_add_char_descr(gl_profile_tab[PROFILE_A_APP_ID].service_handle, &gl_profile_tab[PROFILE_A_APP_ID].descr_uuid,
                                                                 ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, NULL, NULL);
         if (add_descr_ret){
@@ -469,6 +486,7 @@ static void gatts_profile_a_event_handler(esp_gatts_cb_event_t event, esp_gatt_i
         break;
     case ESP_GATTS_CONNECT_EVT: {
         esp_ble_conn_update_params_t conn_params = {0};
+        // bda == bluetooth device address
         memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
         /* For the IOS system, please reference the apple official documents about the ble connection parameters restrictions. */
         conn_params.latency = 0;
@@ -507,6 +525,8 @@ static void gatts_profile_b_event_handler(esp_gatts_cb_event_t event, esp_gatt_i
         gl_profile_tab[PROFILE_B_APP_ID].service_id.id.inst_id = 0x00;
         gl_profile_tab[PROFILE_B_APP_ID].service_id.id.uuid.len = ESP_UUID_LEN_16;
         gl_profile_tab[PROFILE_B_APP_ID].service_id.id.uuid.uuid.uuid16 = GATTS_SERVICE_UUID_TEST_B;
+
+        // No advertising data set?
 
         esp_ble_gatts_create_service(gatts_if, &gl_profile_tab[PROFILE_B_APP_ID].service_id, GATTS_NUM_HANDLE_TEST_B);
         break;
@@ -639,6 +659,9 @@ static void gatts_profile_b_event_handler(esp_gatts_cb_event_t event, esp_gatt_i
     }
 }
 
+// top level event handler which calls the appropriate application's event handler.
+// The first time this is called the gatts_if is ESP_GATT_IF_NONE for all
+// applications so all event handlers are called
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
 {
     /* If event is register event, store the gatts_if for each profile */
@@ -660,7 +683,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         for (idx = 0; idx < PROFILE_NUM; idx++) {
             if (gatts_if == ESP_GATT_IF_NONE || /* ESP_GATT_IF_NONE, not specify a certain gatt_if, need to call every profile cb function */
                     gatts_if == gl_profile_tab[idx].gatts_if) {
-                if (gl_profile_tab[idx].gatts_cb) {
+                if (gl_profile_tab[idx].gatts_cb) { // make sure a callback is actually set
                     gl_profile_tab[idx].gatts_cb(event, gatts_if, param);
                 }
             }
@@ -671,8 +694,9 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 void app_main()
 {
     esp_err_t ret;
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 
-    // Initialize NVS.
+    /* Initialize NVS — it is used to store PHY calibration data */
     ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -680,34 +704,43 @@ void app_main()
     }
     ESP_ERROR_CHECK( ret );
 
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ret = esp_bt_controller_init(&bt_cfg);
+    ret = esp_bt_controller_init(&bt_cfg); // HCI level
     if (ret) {
         ESP_LOGE(GATTS_TAG, "%s initialize controller failed\n", __func__);
         return;
     }
 
-    ret = esp_bt_controller_enable(ESP_BT_MODE_BTDM);
+    // Enable controller in dual BT/BLE mode
+    ret = esp_bt_controller_enable(ESP_BT_MODE_BTDM); // HCI level
     if (ret) {
         ESP_LOGE(GATTS_TAG, "%s enable controller failed\n", __func__);
         return;
     }
-    ret = esp_bluedroid_init();
+
+    ret = esp_bluedroid_init(); // bluedroid BTE ?
     if (ret) {
         ESP_LOGE(GATTS_TAG, "%s init bluetooth failed\n", __func__);
         return;
     }
-    ret = esp_bluedroid_enable();
+    ret = esp_bluedroid_enable(); // bluedroid BTE ?
     if (ret) {
         ESP_LOGE(GATTS_TAG, "%s enable bluetooth failed\n", __func__);
         return;
     }
 
+    // perhaps confusingly a GATTS REGISTER_APP_EVT is first required to
+    // configure the advertising data sent out by GAP this will trigger a
+    // ESP_GAP_BLE_*_DATA_SET_COMPLETE_EVT once completed which will be picked
+    // up by the GAP event handler
     ret = esp_ble_gatts_register_callback(gatts_event_handler);
     if (ret){
         ESP_LOGE(GATTS_TAG, "gatts register error, error code = %x", ret);
         return;
     }
+
+    // GAP will receive an event
+    // (ESP_GAP_BLE_SCAN_RSP_DATA_RAW_SET_COMPLETE_EVT) when device is ready to
+    // start advertising at which time ble_start_advertising may be called
     ret = esp_ble_gap_register_callback(gap_event_handler);
     if (ret){
         ESP_LOGE(GATTS_TAG, "gap register error, error code = %x", ret);
